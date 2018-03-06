@@ -1,0 +1,74 @@
+#!/usr/bin/ansible-playbook
+---
+#
+#      Copyright (c) 2016 World Wide Technology, Inc. 
+#      All rights reserved. 
+#
+#      author: Mark Wall  World Wide Technology
+#      short_description: Automation of F5 Initial Setup 
+#      description: Importing configuration via CSV files to automate initial configuration of F5.
+#                   This playbook will read a CSV file and perform initial F5 setup steps leaving a 
+#                   running active/standby pair.
+#
+
+- name: F5 Setup
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  environment:
+    F5_SERVER: "{{item.appliance}}"
+    F5_USER: "admin"
+    F5_PASSWORD: "admin"
+    F5_VALIDATE_CERTS: "no"
+    
+  tasks:
+  - name: Get facts from CSV file
+    csv_to_facts:
+      src: ./f5_standalone.csv
+
+  - name: set primary_server mgmt IP variable
+    set_fact: 
+      primary_server: "{{ item.appliance }}" 
+    with_items: "{{spreadsheet}}"
+    when: item.primary == "yes" 
+
+  - name: Configure device connectivity
+    bigip_device_connectivity:
+      config_sync_ip: "{{ item.vlan_ha_selfip }}"
+      mirror_primary_address: "{{ item.vlan_ha_selfip }}"
+      unicast_failover:
+        - address: "{{ item.appliance }}"
+        - address: "{{ item.vlan_ha_selfip }}"    
+    with_items: "{{spreadsheet}}"
+
+  - name: Add trusts for all peer devices to {{ primary_server }}
+    bigip_device_trust:
+      server: "{{ primary_server }}"
+      peer_server: "{{ item.appliance }}"
+      peer_hostname: "{{ item.hostname }}"
+      peer_user: "admin"
+      peer_password: "admin"
+    with_items: "{{spreadsheet}}"
+    when: item.primary == 'no'
+
+  - name: Create a sync-failover device group with auto-sync enabled on {{ primary_server }}
+    bigip_device_group:
+      server: "{{ primary_server }}"
+      name: sync-failover
+      type: sync-failover
+      auto_sync: yes
+      state: present
+
+  - name: Add all the current devices to the "sync-failover" device group
+    bigip_device_group_member:
+      server: "{{ primary_server }}"
+      name: "{{ item.hostname }}"
+      device_group: sync-failover
+      state: present
+    with_items: "{{spreadsheet}}"
+
+  - name: Use tmsh to sync the sync-failover group from secondary server
+    bigip_command:
+      server: "{{ primary_server }}"
+      commands: run cm config-sync to-group sync-failover
+

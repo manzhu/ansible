@@ -1,0 +1,167 @@
+#!/usr/bin/ansible-playbook
+---
+#
+#      Copyright (c) 2016 World Wide Technology, Inc. 
+#      All rights reserved. 
+#
+#      author: Mark Wall  World Wide Technology
+#      short_description: Automation of F5 Initial Setup 
+#      description: Importing configuration via CSV files to automate initial configuration of F5.
+#                   This playbook will read a CSV file and perform initial F5 setup steps leaving a 
+#                   running active/standby pair.
+#
+
+- name: F5 Setup
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  environment:
+    F5_SERVER: "{{item.appliance}}"
+    F5_USER: "admin"
+    F5_PASSWORD: "admin"
+    F5_VALIDATE_CERTS: "no"
+    
+  tasks:
+  - name: Get facts from CSV file
+    csv_to_facts:
+      src: ./f5_standalone.csv
+
+  - name: Set Hostname
+    bigip_hostname:
+      hostname: "{{item.hostname}}"
+    with_items: "{{spreadsheet}}"
+
+  - name: Create Internal VLAN and Assign Interface- Untagged Interface
+    bigip_vlan:
+      name: "{{item.vlan_int}}"
+      untagged_interface: "{{item.int_int}}"
+    with_items: "{{spreadsheet}}"
+    when: item.vlan_int_tag == ''
+
+  - name: Create Internal VLAN and Assign Interface- Tagged Interface
+    bigip_vlan:
+      name: "{{item.vlan_int}}"
+      tagged_interface: "{{item.int_int}}"
+      tag: "{{item.vlan_int_tag}}"
+    with_items: "{{spreadsheet}}"
+    when: item.vlan_int_tag != ''
+
+  - name: Create External VLAN and Assign Interface- Untagged Interface
+    bigip_vlan:
+      name: "{{item.vlan_ext}}"
+      untagged_interface: "{{item.ext_int}}"
+    with_items: "{{spreadsheet}}"
+    when: item.vlan_ext_tag == ''    
+
+  - name: Create External VLAN and Assign Interface - Tagged Interface
+    bigip_vlan:
+      name: "{{item.vlan_ext}}"
+      tagged_interface: "{{item.ext_int}}"
+      tag: "{{item.vlan_ext_tag}}"
+    with_items: "{{spreadsheet}}"
+    when: item.vlan_ext_tag != ''    
+
+  - name: Create HA VLAN and Assign Interface - Untagged Interface
+    bigip_vlan:
+      name: "{{item.vlan_ha}}"
+      untagged_interface: "{{item.ha_int}}"
+    with_items: "{{spreadsheet}}"
+    when: item.vlan_ha_tag == ''    
+
+  - name: Create HA VLAN and Assign Interface - Tagged Interface
+    bigip_vlan:
+      name: "{{item.vlan_ha}}"
+      tagged_interface: "{{item.ha_int}}"
+      tag: "{{item.vlan_ha_tag}}"
+    with_items: "{{spreadsheet}}"
+    when: item.vlan_ext_tag != ''    
+
+  - name: Create Self IP Internal
+    bigip_selfip:
+      name: "{{item.vlan_int_selfip}}"
+      vlan: "{{item.vlan_int}}"
+      address: "{{item.vlan_int_selfip}}"
+      netmask: "{{item.vlan_int_selfmask}}"
+      allow_service:
+        - all
+    with_items: "{{spreadsheet}}"
+
+  - name: Create Self IP External
+    bigip_selfip:
+      name: "{{item.vlan_ext_selfip}}"
+      vlan: "{{item.vlan_ext}}"
+      address: "{{item.vlan_ext_selfip}}"
+      netmask: "{{item.vlan_ext_selfmask}}"
+      allow_service:
+        - all
+    with_items: "{{spreadsheet}}"
+
+  - name: Create Self IP HA
+    bigip_selfip:
+      name: "{{item.vlan_ha_selfip}}"
+      vlan: "{{item.vlan_ha}}"
+      address: "{{item.vlan_ha_selfip}}"
+      netmask: "{{item.vlan_ha_selfmask}}"
+      allow_service:
+        - all
+    with_items: "{{spreadsheet}}"
+
+  - name: Create Floating Self IP - Internal
+    bigip_selfip:
+      name: "{{item.vlan_int_float}}"
+      vlan: "{{item.vlan_int}}"
+      address: "{{item.vlan_int_float}}"
+      netmask: "{{item.vlan_int_selfmask}}"
+      traffic_group: "traffic-group-1"
+      allow_service:
+        - all
+    with_items: "{{spreadsheet}}"
+
+  - name: Create Floating Self IP - External
+    bigip_selfip:
+      name: "{{item.vlan_ext_float}}"
+      vlan: "{{item.vlan_ext}}"
+      address: "{{item.vlan_ext_float}}"
+      netmask: "{{item.vlan_ext_selfmask}}"
+      traffic_group: "traffic-group-1"
+      allow_service:
+        - all
+    with_items: "{{spreadsheet}}"
+
+
+  - name: Create DNS Servers
+    bigip_device_dns:
+      name_servers:
+        - "{{item.dns_server_1}}"
+        - "{{item.dns_server_2}}"
+        - "{{item.dns_server_3}}"
+        - "{{item.dns_server_4}}"
+      search:
+        - "{{item.domain}}"
+      state: present
+    with_items: "{{spreadsheet}}"
+
+  - name: Create NTP Servers
+    bigip_device_ntp:
+      ntp_servers:
+        - "{{item.ntp_server_1}}" 
+        - "{{item.ntp_server_2}}" 
+      timezone: "Asia/Shanghai"
+    with_items: "{{spreadsheet}}"
+
+  - name: Set Route to Lab Resource
+    bigip_command:
+      commands:
+        - create sys management-route ntpdns network 172.24.1.0/24 gateway 10.154.191.254
+        - create sys management-route activelicense network 192.168.11.34/32 gateway 10.154.191.254
+        - create sys management-route isoinstall network 172.24.100.100/32 gateway 10.154.191.254
+        - save sys config
+    with_items: "{{spreadsheet}}"
+
+  - name: disable BIG-IP setup utility
+    bigip_command:
+      commands:
+        - modify /sys global-settings gui-setup disabled
+        - save sys config
+    with_items: "{{ spreadsheet}}"
+
